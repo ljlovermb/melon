@@ -1,0 +1,116 @@
+worker_processes 1;
+
+pid /data/logs/melon/melon.pid;
+
+events {
+    worker_connections 4096;
+}
+
+env MELOG_PATH;
+
+http {
+    resolver 114.114.114.114;
+    charset UTF-8;
+    include ./mime.types;
+
+    log_format  main '$remote_addr - $remote_user [$time_local] "$request" '
+        '$status $body_bytes_sent "$http_referer" '
+        '"$http_user_agent" "$request_time" "$ssl_protocol" "$ssl_cipher" "$http_x_forwarded_for"'
+        '"$upstream_addr" "$upstream_status" "$upstream_response_length" "$upstream_response_time"';
+
+    access_log  /data/logs/melon/access.log  main;
+    error_log /data/logs/melon/error.log error;
+
+    sendfile        on;
+    keepalive_timeout  65;
+
+    lua_package_path "$MELOG_PATH/melon/?.lua;./?.lua;/usr/local/lor/?.lua;;;;";
+    #lua_package_cpath "$MELOG_PATH/melon/libs/?.so;;"
+
+    lua_code_cache on;
+
+    lua_shared_dict orange_data 10m;
+
+    init_by_lua_block {
+
+    }
+
+    server {
+        listen 80;
+
+        access_log /data/logs/melon/apis.access.log main;
+        error_log /data/logs/melon/apis.error.log error;
+
+        set $template_root '';
+
+        location /static {
+            alias ./app/static; #app/static;
+        }
+
+        location / {
+            content_by_lua_file ./app/main.lua;
+        }
+
+        location ^~ /apis {
+            rewrite_by_lua_block {
+                local platform = ngx.var.arg_p or 0
+                local interface = ngx.req.get_uri_args()["interface"] or 0
+
+                local target_uri = ''
+                string.gsub(interface,'[^.]+', function (w)
+                    target_uri = target_uri .. '/' .. w
+                end)
+
+                ngx.log(ngx.INFO,"platform:" .. platform .. ",interface:" .. interface .. ",target_uri" .. target_uri)
+                return ngx.req.set_uri("/" .. platform .. target_uri,true)
+            }
+        }
+
+        location ^~ /def_ups {
+            set_by_lua_block $ups {
+                local platform = ngx.var.arg_p or 0
+                local interface = ngx.req.get_uri_args()["interface"] or 0
+
+                local target_uri = ''
+                string.gsub(interface,'[^.]+', function (w)
+                    target_uri = target_uri .. '/' .. w
+                end)
+
+                ngx.log(ngx.INFO,"platform:" .. platform .. ",interface:" .. interface .. ",target_uri" .. target_uri)
+                return "user-center"
+            }
+
+            proxy_pass http://$ups;
+        }
+    }
+
+    server {
+        listen 8080;
+        access_log /data/logs/melon/route.access.log main;
+        error_log /data/logs/melon/route.error.log error;
+
+        location / {
+            allow 127.0.0.1;
+            deny all;
+            dyups_interface;
+        }
+    }
+
+    server {
+        listen 8086;
+        location / {
+            content_by_lua_block{
+                ngx.say("uri:" .. ngx.var.uri)
+            }
+        }
+    }
+
+    server {
+        listen 8088;
+        location / {
+            content_by_lua_block{
+                ngx.say("uri:" .. ngx.var.uri)
+            }
+        }
+    }
+}
